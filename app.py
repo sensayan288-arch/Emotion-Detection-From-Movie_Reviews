@@ -21,6 +21,7 @@ TMDB_BASE_URL = "https://api.themoviedb.org/3"
 TMDB_IMAGE_URL = "https://image.tmdb.org/t/p"
 MOVIE_CACHE_SECONDS = 600
 _movie_cache: dict[str, Any] = {"expires_at": 0.0, "movies": []}
+_detail_cache: dict[int, tuple[float, dict[str, Any]]] = {}
 
 TMDB_HEADERS = {
     "Authorization": f"Bearer {TMDB_API_KEY}",
@@ -144,12 +145,43 @@ def movie_summary(item: dict[str, Any]) -> dict[str, Any]:
 
 
 def get_movie_reviews(movie_id: int) -> list[dict[str, str]]:
-    review_data = tmdb_get(f"movie/{movie_id}/reviews", {"language": "en-US", "page": 1})
-    return [
-        {"user": review.get("author") or "Anonymous", "text": review.get("content", "").strip()}
-        for review in review_data.get("results", [])
-        if review.get("content", "").strip()
-    ]
+    """Fetch every review page TMDB reports for this movie (up to its 500-page API limit)."""
+    first_page = tmdb_get(
+        f"movie/{movie_id}/reviews",
+        {"language": "en-US", "page": 1},
+    )
+    page_count = max(1, min(int(first_page.get("total_pages", 1) or 1), 500))
+    raw_reviews = list(first_page.get("results", []))
+
+    # Fetch remaining pages with modest concurrency to keep large review sets practical.
+    if page_count > 1:
+        from concurrent.futures import ThreadPoolExecutor
+
+        def fetch_page(page_number: int) -> list[dict[str, Any]]:
+            data = tmdb_get(
+                f"movie/{movie_id}/reviews",
+                {"language": "en-US", "page": page_number},
+            )
+            return data.get("results", [])
+
+        with ThreadPoolExecutor(max_workers=4) as executor:
+            for page_reviews in executor.map(fetch_page, range(2, page_count + 1)):
+                raw_reviews.extend(page_reviews)
+
+    reviews = []
+    seen_ids = set()
+    for review in raw_reviews:
+        content = (review.get("content") or "").strip()
+        review_id = review.get("id")
+        if not content or (review_id and review_id in seen_ids):
+            continue
+        if review_id:
+            seen_ids.add(review_id)
+        reviews.append({
+            "user": review.get("author") or "Anonymous",
+            "text": content,
+        })
+    return reviews
 
 
 def tmdb_error_response(error: requests.HTTPError):
@@ -169,11 +201,20 @@ def predict_emotion(review: str) -> str:
 
 
 def analyze_movie(movie: dict[str, Any]) -> dict[str, Any]:
-    scored = [
-        {**review, "emotion": predict_emotion(review["text"])}
-        for review in movie["reviews"]
+    valid_reviews = [
+        review for review in movie["reviews"]
         if review.get("text", "").strip()
     ]
+    if valid_reviews:
+        predictions = model.predict(
+            vectorizer.transform([review["text"] for review in valid_reviews])
+        )
+        scored = [
+            {**review, "emotion": str(emotion).lower()}
+            for review, emotion in zip(valid_reviews, predictions)
+        ]
+    else:
+        scored = []
     counts = Counter(item["emotion"] for item in scored)
     total = len(scored)
     distribution = {
@@ -253,21 +294,33 @@ def search_movies():
 @app.get("/api/movie/<int:movie_id>")
 def get_movie(movie_id: int):
     try:
+        now = time.monotonic()
+        cached = _detail_cache.get(movie_id)
+        if cached and now < cached[0]:
+            return jsonify(cached[1])
+
         details = tmdb_get(f"movie/{movie_id}", {"language": "en-US"})
         movie = movie_summary(details)
-        try:
-            movie["reviews"] = get_movie_reviews(movie_id)
-        except requests.RequestException:
-            app.logger.warning("Could not fetch reviews for TMDB movie %s", movie_id)
-            movie["reviews"] = []
-        return jsonify(analyze_movie(movie))
+        # Do not silently return a partial review set: the count and chart should
+        # represent every review page TMDB reports for this movie.
+        movie["reviews"] = get_movie_reviews(movie_id)
+        result = analyze_movie(movie)
+        _detail_cache[movie_id] = (time.monotonic() + MOVIE_CACHE_SECONDS, result)
+
+        # Keep the in-process cache bounded for long-running deployments.
+        if len(_detail_cache) > 100:
+            oldest_id = min(_detail_cache, key=lambda key: _detail_cache[key][0])
+            _detail_cache.pop(oldest_id, None)
+        return jsonify(result)
     except RuntimeError as error:
         return jsonify({"error": str(error)}), 500
     except requests.HTTPError as error:
         return tmdb_error_response(error)
     except requests.RequestException:
-        app.logger.exception("TMDB movie details request failed")
-        return jsonify({"error": "Could not connect to TMDB. Please try again."}), 502
+        app.logger.exception("TMDB movie details/reviews request failed")
+        return jsonify({
+            "error": "Could not fetch all reviews from TMDB. Please try again."
+        }), 502
 
 
 @app.post("/api/analyze")
