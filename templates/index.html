@@ -12,8 +12,9 @@
 <aside class="sidebar"><a class="brand" href="/"><span class="brand-mark">R</span><span>reelfeel<small>EMOTION STUDIO</small></span></a>
 <div class="side-label">YOUR WORKSPACE</div><button class="nav-item" id="libraryNav">▤ Movie library <span id="movieCount">00</span></button>
 <button class="nav-item" id="analyzeNav">✳ Quick analysis</button><div class="side-divider"></div>
-<div class="side-heading">POPULAR FILMS</div><label class="search-wrap">⌕ <input id="movieSearch" type="search" placeholder="Search by title..."></label>
+<div class="side-heading" id="movieListHeading">POPULAR FILMS</div><label class="search-wrap">⌕ <input id="movieSearch" type="search" placeholder="Search the TMDB catalogue..."></label>
 <div class="movie-list" id="movieList"><div class="loading">Loading movies from TMDB…</div></div>
+<button class="load-more-button" id="loadMoreMovies" hidden>Load more results ↓</button>
 <div class="sidebar-bottom"><div class="model-chip"><span class="pulse"></span><span><b>Model online</b><small>TF-IDF · Linear SVC</small></span></div></div></aside>
 <main class="main-content"><header class="topbar"><div><div class="eyebrow">YOUR CINEMATIC INSIGHTS</div><div class="page-title">Movie emotion analysis</div></div><button class="top-button" id="newReviewBtn">＋ Analyze a review</button></header>
 <section class="landing-screen" id="landingScreen"><div class="landing-copy"><div class="eyebrow">✦ THE STORY BEHIND EVERY STORY</div><h1>Every movie has<br><em>a feeling.</em></h1><p>Go beyond the rating. Explore the emotions hidden in movie reviews and discover what audiences really felt.</p><div class="landing-actions"><button class="explore-button" id="exploreMoviesBtn">Explore movies ↗</button><button class="text-action" id="landingAnalyzeBtn">Analyze a review ＋</button></div><div class="landing-proof">YOUR EMOTION STUDIO · JOY · SADNESS · FEAR · AND MORE</div></div>
