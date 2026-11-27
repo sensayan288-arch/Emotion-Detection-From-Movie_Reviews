@@ -1,5 +1,10 @@
 const $ = (id) => document.getElementById(id);
 let movies = [];
+let searchResults = null;
+let searchPage = 1;
+let totalSearchPages = 1;
+let searchTimer = null;
+let searchRequest = 0;
 let selected = null;
 
 const palette = {
@@ -82,9 +87,10 @@ function showMovie(movie) {
 }
 
 function renderList(query = "") {
-  const filtered = movies.filter(movie =>
-    movie.title.toLowerCase().includes(query.toLowerCase())
-  );
+  const source = searchResults === null ? movies : searchResults;
+  const filtered = searchResults === null
+    ? source.filter(movie => movie.title.toLowerCase().includes(query.toLowerCase()))
+    : source;
   $("movieList").innerHTML = filtered.map(movie =>
     '<button class="movie-item" data-id="' + escapeHtml(movie.id) + '">' +
     (movie.poster_path
@@ -96,12 +102,78 @@ function renderList(query = "") {
   ).join("") || '<div class="loading">No films found.</div>';
 
   document.querySelectorAll(".movie-item").forEach(item => {
-    item.addEventListener("click", () => {
-      const movie = movies.find(candidate => candidate.id === item.dataset.id);
-      if (movie) showMovie(movie);
+    item.addEventListener("click", async () => {
+      const movie = filtered.find(candidate => candidate.id === item.dataset.id);
+      if (!movie) return;
+      if (movie.reviews) {
+        showMovie(movie);
+        return;
+      }
+      item.classList.add("active");
+      toast("Loading movie reviews…");
+      try {
+        const response = await fetch("/api/movie/" + encodeURIComponent(movie.id));
+        const details = await response.json();
+        if (!response.ok) throw new Error(details.error || "Could not load movie details.");
+        showMovie(details);
+      } catch (error) {
+        toast(error.message || "Could not load this movie.");
+      }
     });
   });
-  $("movieCount").textContent = String(movies.length).padStart(2, "0");
+  $("movieCount").textContent = String(filtered.length).padStart(2, "0");
+  const moreButton = $("loadMoreMovies");
+  if (moreButton) moreButton.hidden = searchResults === null || searchPage >= totalSearchPages;
+}
+
+async function searchCatalogue(query, append = false) {
+  const requestId = ++searchRequest;
+  if (!append) {
+    searchResults = [];
+    searchPage = 1;
+    totalSearchPages = 1;
+    $("movieList").innerHTML = '<div class="loading">Searching the TMDB catalogue…</div>';
+    $("loadMoreMovies").hidden = true;
+  }
+  const page = append ? searchPage + 1 : 1;
+  try {
+    const response = await fetch("/api/search?q=" + encodeURIComponent(query) + "&page=" + page);
+    const data = await response.json();
+    if (requestId !== searchRequest) return;
+    if (!response.ok) throw new Error(data.error || "Movie search failed.");
+    searchResults = append ? searchResults.concat(data.results) : data.results;
+    searchPage = data.page;
+    totalSearchPages = data.total_pages;
+    renderList(query);
+    if (!searchResults.length) $("movieList").innerHTML = '<div class="loading">No matching movies found.</div>';
+    $("movieListHeading").textContent = "SEARCH RESULTS · " + (data.total_results || 0).toLocaleString();
+  } catch (error) {
+    if (requestId !== searchRequest) return;
+    $("movieList").innerHTML = '<div class="loading">' + escapeHtml(error.message) + '</div>';
+    toast(error.message || "Movie search failed.");
+  }
+}
+
+function handleMovieSearch(query) {
+  clearTimeout(searchTimer);
+  const clean = query.trim();
+  if (!clean) {
+    searchRequest++;
+    searchResults = null;
+    searchPage = 1;
+    totalSearchPages = 1;
+    $("movieListHeading").textContent = "POPULAR FILMS";
+    $("loadMoreMovies").hidden = true;
+    renderList();
+    return;
+  }
+  if (clean.length < 2) {
+    searchResults = [];
+    $("movieList").innerHTML = '<div class="loading">Type at least 2 characters to search TMDB.</div>';
+    $("loadMoreMovies").hidden = true;
+    return;
+  }
+  searchTimer = setTimeout(() => searchCatalogue(clean), 350);
 }
 
 async function loadMovies() {
@@ -111,7 +183,9 @@ async function loadMovies() {
     const data = await response.json();
     if (!response.ok) throw new Error(data.error || "Could not load movies.");
     movies = data;
-    renderList($("movieSearch").value);
+    searchResults = null;
+    $("movieListHeading").textContent = "POPULAR FILMS";
+    renderList();
     if (!movies.length) $("movieList").innerHTML = '<div class="loading">TMDB returned no movies.</div>';
   } catch (error) {
     $("movieList").innerHTML =
@@ -121,7 +195,11 @@ async function loadMovies() {
   }
 }
 
-$("movieSearch").addEventListener("input", event => renderList(event.target.value));
+$("movieSearch").addEventListener("input", event => handleMovieSearch(event.target.value));
+$("loadMoreMovies").addEventListener("click", () => {
+  const query = $("movieSearch").value.trim();
+  if (query.length >= 2 && searchPage < totalSearchPages) searchCatalogue(query, true);
+});
 ["analyzeNav", "newReviewBtn", "landingAnalyzeBtn"].forEach(id =>
   $(id).addEventListener("click", openModal)
 );
