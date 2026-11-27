@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import pickle
+import time
 from collections import Counter
 from pathlib import Path
 from typing import Any
@@ -18,6 +19,8 @@ app.config["JSON_SORT_KEYS"] = False
 TMDB_API_KEY = os.environ.get("TMDB_API_KEY", "").strip()
 TMDB_BASE_URL = "https://api.themoviedb.org/3"
 TMDB_IMAGE_URL = "https://image.tmdb.org/t/p"
+MOVIE_CACHE_SECONDS = 600
+_movie_cache: dict[str, Any] = {"expires_at": 0.0, "movies": []}
 
 TMDB_HEADERS = {
     "Authorization": f"Bearer {TMDB_API_KEY}",
@@ -59,6 +62,11 @@ def tmdb_get(endpoint: str, params: dict[str, Any] | None = None) -> dict[str, A
 
 
 def get_tmdb_movies() -> list[dict[str, Any]]:
+    # Cache TMDB results to avoid repeating API calls on every page refresh.
+    now = time.monotonic()
+    if now < _movie_cache["expires_at"]:
+        return _movie_cache["movies"]
+
     popular = tmdb_get("movie/popular", {"language": "en-US", "page": 1})
     genres_data = tmdb_get("genre/movie/list", {"language": "en"})
     genres = {
@@ -110,6 +118,8 @@ def get_tmdb_movies() -> list[dict[str, Any]]:
             "reviews": reviews,
         })
 
+    _movie_cache["movies"] = movies
+    _movie_cache["expires_at"] = time.monotonic() + MOVIE_CACHE_SECONDS
     return movies
 
 
@@ -155,12 +165,13 @@ def get_movies():
         return jsonify({"error": str(error)}), 500
     except requests.HTTPError as error:
         status = error.response.status_code if error.response is not None else 502
-        message = (
-            "TMDB rejected the request. Check that your API Read Access Token is correct."
-            if status in (401, 403)
-            else "TMDB could not complete the request."
-        )
-        return jsonify({"error": message, "details": str(error)}), 502
+        if status in (401, 403):
+            message = "TMDB rejected the request. Check your API Read Access Token."
+        elif status == 429:
+            message = "TMDB rate limit reached. Please try again shortly."
+        else:
+            message = "TMDB could not complete the request."
+        return jsonify({"error": message}), 502
     except requests.RequestException as error:
         app.logger.exception("TMDB request failed")
         return jsonify({
