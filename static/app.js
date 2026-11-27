@@ -114,8 +114,10 @@ async function loadMovies() {
     renderList($("movieSearch").value);
     if (!movies.length) $("movieList").innerHTML = '<div class="loading">TMDB returned no movies.</div>';
   } catch (error) {
-    $("movieList").innerHTML = '<div class="loading">Movie library unavailable.</div>';
-    toast(error.message);
+    $("movieList").innerHTML =
+      '<div class="loading">' + escapeHtml(error.message || "Movie library unavailable.") +
+      '<br><br>Check your TMDB_API_KEY setting and try again.</div>';
+    toast(error.message || "Could not load movies.");
   }
 }
 
