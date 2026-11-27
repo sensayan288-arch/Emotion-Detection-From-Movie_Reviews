@@ -10,3 +10,6 @@
 .film-tag{position:relative;align-self:flex-start;background:#111116b8;border-radius:3px}
 .empty-reviews{padding:22px 0;color:var(--muted);font-size:12px}
 @media(max-width:600px){.welcome-row{min-height:220px;padding:28px 18px;margin-top:18px}.welcome-copy h1{font-size:29px}.welcome-row{gap:12px;align-items:flex-start}.film-tag{font-size:10px}}
+
+.tmdb-credit{display:block;width:100%;margin-top:8px;color:#777482;font-size:9px;letter-spacing:0;line-height:1.5}
+.footer{flex-wrap:wrap}
