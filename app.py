@@ -2,15 +2,26 @@ from __future__ import annotations
 
 import os
 import pickle
+import requests
+
+
 from collections import Counter
 from pathlib import Path
 from typing import Any
+from datetime import datetime
 
 from flask import Flask, jsonify, render_template, request
 
 BASE_DIR = Path(__file__).resolve().parent
 app = Flask(__name__)
 app.config["JSON_SORT_KEYS"] = False
+TMDB_API_KEY = os.environ.get("TMDB_API_KEY")
+TMDB_BASE_URL = "https://api.themoviedb.org/3"
+TMDB_IMAGE_URL = "https://image.tmdb.org/t/p/w500"
+TMDB_HEADERS = {
+    "Authorization": f"Bearer {TMDB_API_KEY}",
+    "accept": "application/json"
+}
 
 # Only load model artifacts that you trust.
 with (BASE_DIR / "best_emotion_detection_model.pkl").open("rb") as file:
@@ -28,38 +39,68 @@ EMOTION_META = {
     "neutral": {"label": "Neutral", "color": "#9aa0ad", "icon": "—"},
 }
 
-# Demo records: replace these with your own movie/review dataset.
-MOVIES: list[dict[str, Any]] = [
-    {"id": "salt-harbour", "title": "The Salt Harbour", "year": 2023, "genre": "Drama",
-     "description": "A widowed ferry pilot takes one last crossing through a storm.",
-     "reviews": [
-         {"user": "harlow", "text": "I cried through the entire last act. The loneliness of the pilot after losing his wife is handled so gently. A heartbreaking, sorrowful film."},
-         {"user": "mina_k", "text": "The quiet scenes were beautiful and the ending gave me a little hope. I loved every minute of it."},
-         {"user": "framebyframe", "text": "The storm sequence made me nervous. I was afraid something terrible would happen to the crew."},
-         {"user": "noah.r", "text": "The captain's choices made me furious. The story was frustrating, even though the acting was excellent."},
-         {"user": "cinemacat", "text": "A lovely surprise. I did not expect the final reveal and it made the whole story feel different."}]},
-    {"id": "nine-floors", "title": "Nine Floors Down", "year": 2022, "genre": "Thriller",
-     "description": "A night-shift engineer discovers that one elevator has no recorded destination.",
-     "reviews": [
-         {"user": "reel_rohan", "text": "Every floor was more terrifying than the last. I was on the edge of my seat."},
-         {"user": "sanafilm", "text": "The cast brought so much energy. I had a great time watching this clever thriller."},
-         {"user": "milesaway", "text": "The ending left me confused and disappointed. The characters deserved a better conclusion."},
-         {"user": "pixelpete", "text": "Some scenes were genuinely shocking, and the sound design was fantastic."}]},
-    {"id": "paper-lanterns", "title": "Paper Lanterns", "year": 2024, "genre": "Romance",
-     "description": "Two childhood friends reconnect during a festival in their hometown.",
-     "reviews": [
-         {"user": "lena_w", "text": "This film filled me with warmth. Their reunion was so joyful and sweet."},
-         {"user": "thelastrow", "text": "I felt sad for both characters. The story reminded me of people I have lost."},
-         {"user": "arjunfilm", "text": "A beautiful, gentle surprise with wonderful performances."},
-         {"user": "moviemoody", "text": "The misunderstanding made me angry because it could have been solved with one conversation."}]},
-    {"id": "fair-account", "title": "A Fair Account", "year": 2021, "genre": "Mystery",
-     "description": "An auditor follows a paper trail that leads back to her own family.",
-     "reviews": [
-         {"user": "drew_reviews", "text": "A clever mystery that kept me guessing. I was delighted by the final twist."},
-         {"user": "quietcritic", "text": "The family secrets were disturbing and the atmosphere made me uneasy."},
-         {"user": "filmgrain", "text": "I loved the lead performance. It was a satisfying and exciting watch."},
-         {"user": "rhea_s", "text": "The corruption made my blood boil. I have never disliked a villain this much."}]},
-]
+def tmdb_get(endpoint, params=None):
+    response = requests.get(
+        f"{TMDB_BASE_URL}/{endpoint}",
+        headers=TMDB_HEADERS,
+        params=params,
+        timeout=15
+    )
+    response.raise_for_status()
+    return response.json()
+
+
+def get_tmdb_movies():
+    if not TMDB_API_KEY:
+        raise RuntimeError("TMDB_API_KEY is not configured.")
+
+    popular = tmdb_get("movie/popular", {"language": "en-US", "page": 1})
+
+    genres_data = tmdb_get("genre/movie/list", {"language": "en"})
+    genres = {
+        item["id"]: item["name"]
+        for item in genres_data.get("genres", [])
+    }
+
+    movies = []
+
+    for item in popular.get("results", [])[:8]:
+        movie_id = item["id"]
+
+        review_data = tmdb_get(
+            f"movie/{movie_id}/reviews",
+            {"language": "en-US", "page": 1}
+        )
+
+        reviews = []
+
+        for review in review_data.get("results", []):
+            reviews.append({
+                "user": review.get("author", "Anonymous"),
+                "text": review.get("content", "")
+            })
+
+        genre_ids = item.get("genre_ids", [])
+        genre = genres.get(genre_ids[0], "Movie") if genre_ids else "Movie"
+
+        movies.append({
+            "id": str(movie_id),
+            "title": item.get("title", "Untitled"),
+            "year": item.get("release_date", "")[:4],
+            "genre": genre,
+            "description": item.get("overview", ""),
+            "poster_path": (
+                f"{TMDB_IMAGE_URL}{item['poster_path']}"
+                if item.get("poster_path") else None
+            ),
+            "backdrop_path": (
+                f"https://image.tmdb.org/t/p/w1280{item['backdrop_path']}"
+                if item.get("backdrop_path") else None
+            ),
+            "reviews": reviews
+        })
+
+    return movies
 
 
 def predict_emotion(review: str) -> str:
@@ -85,7 +126,20 @@ def home():
 
 @app.get("/api/movies")
 def get_movies():
-    return jsonify([analyze_movie(movie) for movie in MOVIES])
+    try:
+        movies = get_tmdb_movies()
+        return jsonify([
+            analyze_movie(movie) for movie in movies
+        ])
+
+    except requests.RequestException as error:
+        return jsonify({
+            "error": "Could not connect to TMDB.",
+            "details": str(error)
+        }), 502
+
+    except RuntimeError as error:
+        return jsonify({"error": str(error)}), 500
 
 
 @app.post("/api/analyze")
