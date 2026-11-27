@@ -2,25 +2,26 @@ from __future__ import annotations
 
 import os
 import pickle
-import requests
-
-
 from collections import Counter
 from pathlib import Path
 from typing import Any
-from datetime import datetime
 
+import requests
 from flask import Flask, jsonify, render_template, request
 
 BASE_DIR = Path(__file__).resolve().parent
 app = Flask(__name__)
 app.config["JSON_SORT_KEYS"] = False
-TMDB_API_KEY = os.environ.get("TMDB_API_KEY")
+
+# Set this locally or in Render's Environment settings.
+# Use TMDB's API Read Access Token (Bearer token), not the v3 API key.
+TMDB_API_KEY = os.environ.get("TMDB_API_KEY", "").strip()
 TMDB_BASE_URL = "https://api.themoviedb.org/3"
-TMDB_IMAGE_URL = "https://image.tmdb.org/t/p/w500"
+TMDB_IMAGE_URL = "https://image.tmdb.org/t/p"
+
 TMDB_HEADERS = {
     "Authorization": f"Bearer {TMDB_API_KEY}",
-    "accept": "application/json"
+    "accept": "application/json",
 }
 
 # Only load model artifacts that you trust.
@@ -39,23 +40,26 @@ EMOTION_META = {
     "neutral": {"label": "Neutral", "color": "#9aa0ad", "icon": "—"},
 }
 
-def tmdb_get(endpoint, params=None):
+
+def tmdb_get(endpoint: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
+    if not TMDB_API_KEY:
+        raise RuntimeError(
+            "TMDB_API_KEY is missing. Add your TMDB API Read Access Token "
+            "to your environment variables."
+        )
+
     response = requests.get(
-        f"{TMDB_BASE_URL}/{endpoint}",
+        f"{TMDB_BASE_URL}/{endpoint.lstrip('/')}",
         headers=TMDB_HEADERS,
-        params=params,
-        timeout=15
+        params=params or {},
+        timeout=20,
     )
     response.raise_for_status()
     return response.json()
 
 
-def get_tmdb_movies():
-    if not TMDB_API_KEY:
-        raise RuntimeError("TMDB_API_KEY is not configured.")
-
+def get_tmdb_movies() -> list[dict[str, Any]]:
     popular = tmdb_get("movie/popular", {"language": "en-US", "page": 1})
-
     genres_data = tmdb_get("genre/movie/list", {"language": "en"})
     genres = {
         item["id"]: item["name"]
@@ -63,41 +67,47 @@ def get_tmdb_movies():
     }
 
     movies = []
-
     for item in popular.get("results", [])[:8]:
         movie_id = item["id"]
 
-        review_data = tmdb_get(
-            f"movie/{movie_id}/reviews",
-            {"language": "en-US", "page": 1}
-        )
-
-        reviews = []
-
-        for review in review_data.get("results", []):
-            reviews.append({
-                "user": review.get("author", "Anonymous"),
-                "text": review.get("content", "")
-            })
+        # A review endpoint can occasionally fail for an individual title.
+        # Keep the movie in the library even if its reviews cannot be fetched.
+        try:
+            review_data = tmdb_get(
+                f"movie/{movie_id}/reviews",
+                {"language": "en-US", "page": 1},
+            )
+            reviews = [
+                {
+                    "user": review.get("author") or "Anonymous",
+                    "text": review.get("content", "").strip(),
+                }
+                for review in review_data.get("results", [])
+                if review.get("content", "").strip()
+            ]
+        except requests.RequestException:
+            reviews = []
 
         genre_ids = item.get("genre_ids", [])
         genre = genres.get(genre_ids[0], "Movie") if genre_ids else "Movie"
+        release_date = item.get("release_date") or ""
 
         movies.append({
             "id": str(movie_id),
-            "title": item.get("title", "Untitled"),
-            "year": item.get("release_date", "")[:4],
+            "title": item.get("title") or "Untitled",
+            "year": release_date[:4] or "—",
             "genre": genre,
-            "description": item.get("overview", ""),
+            "description": item.get("overview") or "No synopsis is available yet.",
             "poster_path": (
-                f"{TMDB_IMAGE_URL}{item['poster_path']}"
+                f"{TMDB_IMAGE_URL}/w500{item['poster_path']}"
                 if item.get("poster_path") else None
             ),
             "backdrop_path": (
-                f"https://image.tmdb.org/t/p/w1280{item['backdrop_path']}"
+                f"{TMDB_IMAGE_URL}/w1280{item['backdrop_path']}"
                 if item.get("backdrop_path") else None
             ),
-            "reviews": reviews
+            "rating": item.get("vote_average"),
+            "reviews": reviews,
         })
 
     return movies
@@ -108,15 +118,27 @@ def predict_emotion(review: str) -> str:
 
 
 def analyze_movie(movie: dict[str, Any]) -> dict[str, Any]:
-    scored = [{**review, "emotion": predict_emotion(review["text"])} for review in movie["reviews"]]
+    scored = [
+        {**review, "emotion": predict_emotion(review["text"])}
+        for review in movie["reviews"]
+        if review.get("text", "").strip()
+    ]
     counts = Counter(item["emotion"] for item in scored)
     total = len(scored)
-    distribution = {e: round(counts.get(e, 0) * 100 / total) if total else 0 for e in EMOTIONS}
-    headline = max(EMOTIONS, key=lambda e: counts.get(e, 0)) if total else "neutral"
-    return {**{k: v for k, v in movie.items() if k != "reviews"},
-            "reviews": scored, "review_count": total, "distribution": distribution,
-            "predicted_emotion": headline, "leading_count": counts.get(headline, 0),
-            "leading_percent": distribution.get(headline, 0)}
+    distribution = {
+        emotion: round(counts.get(emotion, 0) * 100 / total) if total else 0
+        for emotion in EMOTIONS
+    }
+    headline = max(EMOTIONS, key=lambda emotion: counts.get(emotion, 0))
+    return {
+        **{key: value for key, value in movie.items() if key != "reviews"},
+        "reviews": scored,
+        "review_count": total,
+        "distribution": distribution,
+        "predicted_emotion": headline,
+        "leading_count": counts.get(headline, 0),
+        "leading_percent": distribution[headline],
+    }
 
 
 @app.get("/")
@@ -128,18 +150,23 @@ def home():
 def get_movies():
     try:
         movies = get_tmdb_movies()
-        return jsonify([
-            analyze_movie(movie) for movie in movies
-        ])
-
-    except requests.RequestException as error:
-        return jsonify({
-            "error": "Could not connect to TMDB.",
-            "details": str(error)
-        }), 502
-
+        return jsonify([analyze_movie(movie) for movie in movies])
     except RuntimeError as error:
         return jsonify({"error": str(error)}), 500
+    except requests.HTTPError as error:
+        status = error.response.status_code if error.response is not None else 502
+        message = (
+            "TMDB rejected the request. Check that your API Read Access Token is correct."
+            if status in (401, 403)
+            else "TMDB could not complete the request."
+        )
+        return jsonify({"error": message, "details": str(error)}), 502
+    except requests.RequestException as error:
+        app.logger.exception("TMDB request failed")
+        return jsonify({
+            "error": "Could not connect to TMDB. Please try again.",
+            "details": str(error),
+        }), 502
 
 
 @app.post("/api/analyze")
@@ -150,17 +177,28 @@ def analyze_review():
         return jsonify({"error": "Please enter a movie review."}), 400
     if len(review) > 5000:
         return jsonify({"error": "Please keep reviews under 5,000 characters."}), 400
+
     emotion = predict_emotion(review)
-    return jsonify({"review": review, "predicted_emotion": emotion,
-                    "emotion_label": EMOTION_META.get(emotion, {}).get("label", emotion.title())})
+    return jsonify({
+        "review": review,
+        "predicted_emotion": emotion,
+        "emotion_label": EMOTION_META.get(emotion, {}).get("label", emotion.title()),
+    })
 
 
 @app.get("/health")
 def health():
-    return jsonify({"status": "ok", "model_loaded": True,
-                    "emotions": list(getattr(model, "classes_", EMOTIONS))})
+    return jsonify({
+        "status": "ok",
+        "model_loaded": True,
+        "tmdb_configured": bool(TMDB_API_KEY),
+        "emotions": list(getattr(model, "classes_", EMOTIONS)),
+    })
 
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", "5000")),
-            debug=os.environ.get("FLASK_DEBUG") == "1")
+    app.run(
+        host="0.0.0.0",
+        port=int(os.environ.get("PORT", "5000")),
+        debug=os.environ.get("FLASK_DEBUG") == "1",
+    )
