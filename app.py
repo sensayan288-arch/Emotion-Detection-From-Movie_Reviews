@@ -123,6 +123,47 @@ def get_tmdb_movies() -> list[dict[str, Any]]:
     return movies
 
 
+
+def movie_summary(item: dict[str, Any]) -> dict[str, Any]:
+    genre_ids = item.get("genre_ids", [])
+    genre = str(genre_ids[0]) if genre_ids else "Movie"
+    genres = item.get("genres", [])
+    if genres:
+        genre = genres[0].get("name") or genre
+    release_date = item.get("release_date") or ""
+    return {
+        "id": str(item.get("id")),
+        "title": item.get("title") or item.get("original_title") or "Untitled",
+        "year": release_date[:4] or "—",
+        "genre": genre,
+        "description": item.get("overview") or "No synopsis is available yet.",
+        "poster_path": f"{TMDB_IMAGE_URL}/w500{item['poster_path']}" if item.get("poster_path") else None,
+        "backdrop_path": f"{TMDB_IMAGE_URL}/w1280{item['backdrop_path']}" if item.get("backdrop_path") else None,
+        "rating": item.get("vote_average"),
+    }
+
+
+def get_movie_reviews(movie_id: int) -> list[dict[str, str]]:
+    review_data = tmdb_get(f"movie/{movie_id}/reviews", {"language": "en-US", "page": 1})
+    return [
+        {"user": review.get("author") or "Anonymous", "text": review.get("content", "").strip()}
+        for review in review_data.get("results", [])
+        if review.get("content", "").strip()
+    ]
+
+
+def tmdb_error_response(error: requests.HTTPError):
+    status = error.response.status_code if error.response is not None else 502
+    if status in (401, 403):
+        message = "TMDB rejected the request. Check your API Read Access Token."
+    elif status == 429:
+        message = "TMDB rate limit reached. Please try again shortly."
+    elif status == 404:
+        message = "TMDB could not find that movie."
+    else:
+        message = "TMDB could not complete the request."
+    return jsonify({"error": message}), 502
+
 def predict_emotion(review: str) -> str:
     return str(model.predict(vectorizer.transform([review]))[0]).lower()
 
@@ -178,6 +219,55 @@ def get_movies():
             "error": "Could not connect to TMDB. Please try again.",
             "details": str(error),
         }), 502
+
+
+@app.get("/api/search")
+def search_movies():
+    query = request.args.get("q", "").strip()
+    try:
+        page = max(1, min(int(request.args.get("page", "1")), 500))
+    except ValueError:
+        page = 1
+    if len(query) < 2:
+        return jsonify({"error": "Enter at least 2 characters to search."}), 400
+    try:
+        data = tmdb_get("search/movie", {
+            "query": query, "include_adult": "false",
+            "language": "en-US", "page": page,
+        })
+        return jsonify({
+            "results": [movie_summary(item) for item in data.get("results", [])],
+            "page": data.get("page", page),
+            "total_pages": min(data.get("total_pages", 1), 500),
+            "total_results": data.get("total_results", 0),
+        })
+    except RuntimeError as error:
+        return jsonify({"error": str(error)}), 500
+    except requests.HTTPError as error:
+        return tmdb_error_response(error)
+    except requests.RequestException:
+        app.logger.exception("TMDB movie search failed")
+        return jsonify({"error": "Could not connect to TMDB. Please try again."}), 502
+
+
+@app.get("/api/movie/<int:movie_id>")
+def get_movie(movie_id: int):
+    try:
+        details = tmdb_get(f"movie/{movie_id}", {"language": "en-US"})
+        movie = movie_summary(details)
+        try:
+            movie["reviews"] = get_movie_reviews(movie_id)
+        except requests.RequestException:
+            app.logger.warning("Could not fetch reviews for TMDB movie %s", movie_id)
+            movie["reviews"] = []
+        return jsonify(analyze_movie(movie))
+    except RuntimeError as error:
+        return jsonify({"error": str(error)}), 500
+    except requests.HTTPError as error:
+        return tmdb_error_response(error)
+    except requests.RequestException:
+        app.logger.exception("TMDB movie details request failed")
+        return jsonify({"error": "Could not connect to TMDB. Please try again."}), 502
 
 
 @app.post("/api/analyze")
