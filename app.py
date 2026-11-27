@@ -126,7 +126,7 @@ def get_tmdb_movies() -> list[dict[str, Any]]:
 
 def movie_summary(item: dict[str, Any]) -> dict[str, Any]:
     genre_ids = item.get("genre_ids", [])
-    genre = str(genre_ids[0]) if genre_ids else "Movie"
+    genre = "Movie"
     genres = item.get("genres", [])
     if genres:
         genre = genres[0].get("name") or genre
