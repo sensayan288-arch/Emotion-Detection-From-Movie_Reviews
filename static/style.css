@@ -15,3 +15,17 @@
 .footer{flex-wrap:wrap}
 
 .load-more-button{width:100%;margin-top:10px;padding:10px 8px;border:1px solid #62513a;border-radius:5px;background:#211d20;color:#e5c184;font:11px var(--sans);cursor:pointer;transition:background .2s ease,border-color .2s ease}.load-more-button:hover{background:#30271f;border-color:var(--gold)}.load-more-button[hidden]{display:none}
+
+/* Independent desktop scrolling: keep the movie library and workspace in their own panes. */
+@media(min-width:601px){
+  html,body{height:100%;overflow:hidden}
+  .app-shell{height:100vh;min-height:0;overflow:hidden}
+  .sidebar{height:100vh;min-height:0;overflow-y:auto;overscroll-behavior:contain;scrollbar-width:thin;scrollbar-color:#51483d transparent}
+  .main-content{height:100vh;min-height:0;overflow-y:auto;overscroll-behavior:contain;scrollbar-width:thin;scrollbar-color:#51483d transparent}
+}
+@media(max-width:600px){
+  html,body{height:auto;overflow:auto}
+  .app-shell{height:auto;min-height:100vh;overflow:visible}
+  .sidebar{height:auto;min-height:auto;overflow:visible}
+  .main-content{height:auto;min-height:0;overflow:visible}
+}
