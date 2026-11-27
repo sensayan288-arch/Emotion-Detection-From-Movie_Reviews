@@ -156,6 +156,7 @@ async function searchCatalogue(query, append = false) {
 
 function handleMovieSearch(query) {
   clearTimeout(searchTimer);
+  searchRequest++;
   const clean = query.trim();
   if (!clean) {
     searchRequest++;
