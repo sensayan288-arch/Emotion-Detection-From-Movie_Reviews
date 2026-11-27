@@ -1,48 +1,79 @@
 # ReelFeel — Movie Emotion Studio
 
-A dark, cinematic Flask dashboard for exploring emotions expressed in movie reviews. It uses a supplied TF-IDF vectorizer and Linear SVC model to classify reviews into **joy, sadness, anger, fear, surprise,** or **neutral**.
+ReelFeel is a cinematic Flask dashboard that explores emotions expressed in movie reviews. It uses a trained TF-IDF vectorizer and emotion-classification model to classify reviews into **joy, sadness, anger, fear, surprise,** or **neutral**.
 
 ## Features
 
-- Film library with title search and selectable movie views
-- Emotion breakdown and leading-emotion summary calculated from model predictions
-- Individual review cards with their predicted emotion
-- Quick analysis modal for any new review
-- JSON endpoints for the frontend and future integrations
-- Responsive layout for desktop and mobile
-- Cinematic first-visit screen when no movie is selected
+- Fetches popular movies, genres, posters, and backdrops from TMDB
+- Fetches available English user reviews from each movie's TMDB reviews endpoint
+- Scores each fetched review with the supplied emotion model
+- Displays an emotion distribution and individual review predictions
+- Includes quick analysis for a review pasted by the user
+- Responsive dark cinematic interface with a first-visit landing screen
 
-## Required model files
+## Requirements
 
-Place these two trusted model artifacts beside `app.py` before starting the server:
+- Python 3.10–3.12 recommended
+- A TMDB account and API Read Access Token
+- Both trusted model files listed below
+
+## Model files
+
+Place these files beside `app.py`:
 
 - `best_emotion_detection_model.pkl`
 - `tfidf_vectorizer.pkl`
 
-**Important:** the binary model artifacts are not part of this initial source upload. The application needs both files at startup. Do not load pickle files from untrusted sources.
+The application loads these pickle files at startup. Only use model files from a trusted source. The serialized model was prepared with scikit-learn 1.6.1.
 
 ## Run locally
 
-Python 3.10–3.12 is recommended. The model artifacts were serialized with scikit-learn 1.6.1.
+Create and activate a virtual environment, then install dependencies:
 
 ```bash
 python -m venv .venv
-# Windows: .venv\\Scripts\\activate
-# macOS / Linux: source .venv/bin/activate
+# Windows PowerShell: .venv\\Scripts\\Activate.ps1
+# macOS/Linux: source .venv/bin/activate
 pip install -r requirements.txt
+```
+
+Set your TMDB **API Read Access Token** as an environment variable. Do not paste the token into source code or commit it to GitHub.
+
+Windows PowerShell:
+
+```powershell
+$env:TMDB_API_KEY="YOUR_TMDB_READ_ACCESS_TOKEN"
+python app.py
+```
+
+macOS/Linux:
+
+```bash
+export TMDB_API_KEY="YOUR_TMDB_READ_ACCESS_TOKEN"
 python app.py
 ```
 
 Open <http://127.0.0.1:5000>.
 
+## Deploy on Render
+
+1. Create a Render Web Service connected to this GitHub repository.
+2. Use `pip install -r requirements.txt` as the build command.
+3. Use `gunicorn app:app` as the start command.
+4. In the Render service's **Environment** settings, add `TMDB_API_KEY` with your TMDB API Read Access Token.
+5. Ensure both model files are present in the deployed repository beside `app.py`, then deploy.
+
+Never commit the TMDB token or a local `.env` file.
+
 ## API endpoints
 
-- `GET /api/movies` — starter movie list, review-level predictions and emotion distribution.
-- `POST /api/analyze` — classify a review. Example body: `{"review":"The story was moving and the ending made me smile."}`
-- `GET /health` — model status and available model classes.
+- `GET /` — ReelFeel dashboard.
+- `GET /api/movies` — popular TMDB movies with available reviews and model predictions.
+- `POST /api/analyze` — classify a review. Example JSON body: `{"review":"The story was moving and the ending made me smile."}`.
+- `GET /health` — model status and whether the TMDB token is configured.
 
-The starter movie/review content is demonstration content; replace it with your real dataset when ready. Percentages represent the share of reviews assigned to each class, not probability/confidence scores.
+## Notes
 
-## Security
+TMDB may return no reviews for some movies. Such movies remain visible, but their emotion distribution is empty. The displayed percentages represent the share of fetched reviews assigned to each emotion, not probability or model confidence scores.
 
-Never commit API keys, passwords, private datasets, or `.env` files. Keep future API credentials in environment variables.
+This product uses the TMDB API but is not endorsed or certified by TMDB.
